@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# local secrets and data
+.env
+*.env
+env
+*.sqlite3*
+.codegraph/

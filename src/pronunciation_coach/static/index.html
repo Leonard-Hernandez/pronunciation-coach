@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pronunciation Coach</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Pronunciation Coach</h1>
+    <nav role="tablist">
+      <button class="tab active" data-tab="practice" role="tab">Practice</button>
+      <button class="tab" data-tab="library" role="tab">Library</button>
+      <button class="tab" data-tab="sounds" role="tab">Sounds</button>
+      <button class="tab" data-tab="writing" role="tab">Writing</button>
+      <button class="tab" data-tab="stats" role="tab">Stats</button>
+    </nav>
+    <span id="status" class="status" aria-live="polite"></span>
+  </header>
+
+  <main>
+    <!-- Practice -->
+    <section id="tab-practice" class="panel active">
+      <div id="no-book" class="empty hidden">
+        <p>No book yet. Add one in the <a href="#" data-goto="library">Library</a>.</p>
+      </div>
+      <div id="practice" class="hidden">
+        <div class="book-line">
+          <span id="book-title"></span>
+          <span id="progress"></span>
+        </div>
+        <p id="sentence" class="sentence"></p>
+        <div class="controls">
+          <button id="prev" class="ghost" title="Previous sentence (←)">&larr; Prev</button>
+          <button id="listen" class="ghost" title="Listen to the sentence">&#128264; Listen</button>
+          <button id="record" class="record" title="Record (Space)">
+            <span class="dot"></span><span id="record-label">Record</span>
+          </button>
+          <button id="retry" class="ghost" title="Clear result and try again">Retry</button>
+          <button id="next" class="ghost" title="Next sentence (→)">Next &rarr;</button>
+        </div>
+        <p class="hint">Space: start/stop recording &middot; Click a word to hear it and see its sounds &middot; Click a /sound/ to hear it</p>
+
+        <div id="result" class="result hidden">
+          <div class="score-row">
+            <div id="score" class="score"></div>
+            <div id="word-detail" class="word-detail"></div>
+          </div>
+          <h2>Corrections</h2>
+          <ul id="errors" class="errors"></ul>
+          <details class="raw">
+            <summary>Phonemes</summary>
+            <p><b>Expected:</b> <span id="raw-expected"></span></p>
+            <p><b>Heard:</b> <span id="raw-heard"></span></p>
+            <p id="raw-device" class="muted"></p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- Library -->
+    <section id="tab-library" class="panel">
+      <form id="upload" class="card">
+        <h2>Add a book</h2>
+        <label class="file">
+          <input type="file" id="file" accept=".epub,.pdf,.txt">
+          <span>EPUB, PDF or TXT</span>
+        </label>
+        <p class="muted">&hellip;or paste some text:</p>
+        <textarea id="paste" rows="4" placeholder="Paste a paragraph to practice"></textarea>
+        <button type="submit" class="primary">Add</button>
+      </form>
+      <ul id="books" class="books"></ul>
+    </section>
+
+    <!-- Sounds -->
+    <section id="tab-sounds" class="panel">
+      <header class="sounds-head">
+        <h2 class="sounds-title">Sounds of American English</h2>
+        <p class="sounds-lede">Play a symbol to hear the sound on its own, a word to hear it in context, and a minimal pair to hear the difference.</p>
+        <div id="sound-filter" class="seg" role="group" aria-label="Which sounds to show">
+          <button type="button" data-filter="all" aria-pressed="true">All sounds <span class="seg-count" id="count-all"></span></button>
+          <button type="button" data-filter="hard" aria-pressed="false"><span class="hard-dot" aria-hidden="true"></span>Hard for Spanish speakers <span class="seg-count" id="count-hard"></span></button>
+        </div>
+      </header>
+      <nav id="sound-index" class="sound-index" aria-label="Jump to a sound"></nav>
+      <div id="sounds"></div>
+      <details class="credits">
+        <summary id="sound-credits-summary">Audio credits</summary>
+        <p>Recordings of isolated sounds come from the IPA articles of Wikipedia, hosted on Wikimedia Commons. They were trimmed and loudness-normalized; modified files keep their original license. Diphthongs and unstressed /ɚ/ are played inside an example word with the Piper voice.</p>
+        <ul id="sound-credits-list"></ul>
+      </details>
+    </section>
+
+    <!-- Writing -->
+    <section id="tab-writing" class="panel">
+      <header class="sounds-head">
+        <h2 class="sounds-title">Writing</h2>
+        <p class="sounds-lede">Write exam-style texts for IELTS and B2 First, get every mistake explained in Spanish, and practise the grammar behind it.</p>
+        <div id="w-views" class="seg" role="group" aria-label="Writing section">
+          <button type="button" data-view="write" aria-pressed="true">Write</button>
+          <button type="button" data-view="lessons" aria-pressed="false">Lessons <span class="seg-count" id="w-count-lessons"></span></button>
+          <button type="button" data-view="progress" aria-pressed="false">Progress <span class="seg-count" id="w-count-subs"></span></button>
+        </div>
+      </header>
+
+      <!-- Write -->
+      <div id="w-view-write" class="w-view">
+        <div class="w-layout">
+          <aside class="w-side" aria-label="Writing tasks">
+            <label class="w-field">
+              <span class="label">Exam</span>
+              <select id="w-exam-filter"><option value="">All tasks</option></select>
+            </label>
+            <ul id="w-task-list" class="w-task-list"></ul>
+            <details id="w-gen" class="w-gen">
+              <summary>Generate a new task</summary>
+              <form id="w-gen-form" class="w-gen-form">
+                <label class="w-field"><span class="label">Format</span><select id="w-gen-exam"></select></label>
+                <label class="w-field"><span class="label">Type</span><select id="w-gen-genre"><option value="">Any</option></select></label>
+                <label class="w-field"><span class="label">Topic (optional)</span><input id="w-gen-topic" type="text" maxlength="200" placeholder="e.g. a job interview, a team conflict"></label>
+                <button type="submit" class="primary" id="w-gen-btn">Generate</button>
+                <p id="w-gen-msg" class="w-msg" role="status"></p>
+              </form>
+            </details>
+          </aside>
+
+          <div class="w-main">
+            <article id="w-task" class="w-task" aria-live="polite"></article>
+            <div class="w-editor">
+              <label for="w-text" class="visually-hidden">Your text</label>
+              <textarea id="w-text" rows="14" spellcheck="false" autocomplete="off" placeholder="Write your answer here…"></textarea>
+              <div class="w-editor-bar">
+                <div class="w-count" id="w-count" aria-live="polite">
+                  <span class="w-count-n" id="w-count-n">0</span>
+                  <span class="w-count-l" id="w-count-l">words</span>
+                  <span class="w-meter" aria-hidden="true"><span id="w-meter-fill"></span><span id="w-meter-lo"></span><span id="w-meter-hi"></span></span>
+                </div>
+                <button type="button" class="ghost w-timer" id="w-timer" aria-pressed="false" title="Start a countdown with the exam time"></button>
+                <button type="button" class="primary w-submit" id="w-submit">Check my writing</button>
+              </div>
+              <p class="hint w-hint">Spell-check is off on purpose, like in the exam. Your draft is saved in this browser.</p>
+              <p id="w-error" class="w-msg w-msg-error hidden" role="alert"></p>
+            </div>
+            <section id="w-result" class="w-result hidden" aria-label="Correction"></section>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lessons -->
+      <div id="w-view-lessons" class="w-view hidden">
+        <div class="w-layout">
+          <nav class="w-side" aria-label="Grammar lessons">
+            <ul id="w-lesson-list" class="w-task-list"></ul>
+          </nav>
+          <div class="w-main"><article id="w-lesson" class="w-lesson"></article></div>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div id="w-view-progress" class="w-view hidden">
+        <div class="kpis" id="w-kpis"></div>
+        <div class="card">
+          <h2>Scores over time</h2>
+          <div id="w-legend" class="w-legend"></div>
+          <div id="w-chart" class="chart"></div>
+        </div>
+        <div class="grid2">
+          <div class="card">
+            <h2>Most frequent errors</h2>
+            <ul id="w-top-cats" class="errors"></ul>
+          </div>
+          <div class="card">
+            <h2>Review next</h2>
+            <ul id="w-suggest" class="errors"></ul>
+          </div>
+        </div>
+        <div class="card">
+          <h2>History</h2>
+          <table id="w-history" class="table"></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stats -->
+    <section id="tab-stats" class="panel">
+      <div class="kpis" id="kpis"></div>
+      <div class="card">
+        <h2>Average accuracy by day</h2>
+        <div id="chart" class="chart"></div>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h2>Most frequent errors</h2>
+          <ul id="top-errors" class="errors"></ul>
+        </div>
+        <div class="card">
+          <h2>Recent sessions</h2>
+          <table id="sessions" class="table"></table>
+        </div>
+      </div>
+      <div id="stats-writing" class="card stats-writing hidden"></div>
+    </section>
+  </main>
+
+  <aside id="ph-pop" class="ph-pop hidden" role="dialog" aria-label="Sound guide"></aside>
+  <script src="/static/app.js"></script>
+  <script src="/static/writing.js"></script>
+</body>
+</html>
