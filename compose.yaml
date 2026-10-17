@@ -1,0 +1,33 @@
+# docker compose up -d   →   http://127.0.0.1:8765
+#
+# GROQ_API_KEY (for the Writing tab) is read from your existing env file, or from the
+# environment of the shell that runs `docker compose`. Without it, everything except
+# Writing correction still works.
+services:
+  coach:
+    build:
+      context: .
+      args:
+        VARIANT: ${PC_VARIANT:-cpu}     # PC_VARIANT=cuda for the NVIDIA image
+    image: pronunciation-coach:${PC_VARIANT:-cpu}
+    ports:
+      - "127.0.0.1:${PC_PORT:-8765}:8765"
+    volumes:
+      - coach-data:/data               # SQLite DB, Piper voices, Hugging Face model cache
+    env_file:
+      - path: ${HOME}/.config/pronunciation-coach/env
+        required: false
+    environment:
+      PC_WRITING_MODEL: ${PC_WRITING_MODEL:-openai/gpt-oss-120b}
+    restart: unless-stopped
+    # Uncomment with PC_VARIANT=cuda and the NVIDIA Container Toolkit installed:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  coach-data:
