@@ -73,6 +73,26 @@ def _clean_task(task: dict | None) -> dict | None:
     }
 
 
+def _recognized_with_spans(reply: dict) -> tuple[list[str], list[list[float]] | None]:
+    """Normalize the recognizer's phonemes, carrying each raw token's time span along.
+
+    tokenize_ipa works chunk by chunk, so normalizing each raw token separately gives the
+    same sequence; if that ever stops being true, timings are dropped (no word playback).
+    """
+    recognized = tokenize_ipa(reply["phonemes"])
+    raw_spans = reply.get("spans")
+    raw = reply["phonemes"].split()
+    if not raw_spans or len(raw_spans) != len(raw):
+        return recognized, None
+    tokens: list[str] = []
+    spans: list[list[float]] = []
+    for tok, span in zip(raw, raw_spans):
+        for t in tokenize_ipa(tok):
+            tokens.append(t)
+            spans.append(span)
+    return (recognized, spans) if tokens == recognized else (recognized, None)
+
+
 def _llm_http_error(exc: LLMError) -> HTTPException:
     if isinstance(exc, LLMRateLimited):
         headers = {"Retry-After": str(int(exc.retry_after) + 1)} if exc.retry_after else None
@@ -199,8 +219,8 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
             reply = state["rec"].recognize(samples)
         except RecognizerError as exc:
             raise HTTPException(503, f"recognizer unavailable: {exc}") from exc
-        recognized = tokenize_ipa(reply["phonemes"])
-        result = score(expected_words, recognized)
+        recognized, spans = _recognized_with_spans(reply)
+        result = score(expected_words, recognized, spans, reply.get("audio_seconds"))
         data = result.to_dict()
         attempt_id = _db().add_attempt(
             book_id=book_id, sentence_idx=sentence_idx, sentence=text,

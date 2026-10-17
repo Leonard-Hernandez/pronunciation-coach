@@ -7,6 +7,7 @@ const state = {
   bookId: null,
   current: null,     // sentence payload from the API
   result: null,      // last score result
+  recordingUrl: null, // object URL of the last recording, for "You vs model"
   recorder: null,
   chunks: [],
   busy: false,
@@ -60,7 +61,9 @@ document.querySelectorAll("[data-goto]").forEach((a) =>
 let player = null;
 let playerUrl = null;
 let speakAbort = null;
+let clipSource = null;  // Web Audio source playing a slice of the user's recording
 function stopSpeaking() {
+  if (clipSource) { try { clipSource.stop(); } catch {} clipSource = null; }
   if (speakAbort) speakAbort.abort();
   speakAbort = null;
   if (player) player.pause();
@@ -104,7 +107,8 @@ async function playSequence(items, gapMs = 250) {
       if (ctrl.signal.aborted) return;
       if (i && gapMs) await new Promise((r) => setTimeout(r, gapMs));
       item.before && item.before();
-      try { await playClip(item.url, ctrl); } finally { item.after && item.after(); }
+      try { await (item.play ? item.play(ctrl) : playClip(item.url, ctrl)); }
+      finally { item.after && item.after(); }
     }
   } catch (err) {
     if (err.name !== "AbortError" && speakAbort === ctrl) setStatus(`Speech error: ${err.message}`);
@@ -438,6 +442,7 @@ function selectWord(index, text) {
     el("div", {}, el("b", {}, w.text), ` · ${pct(w.score)}`),
     el("div", { class: "detail-row" }, el("span", { class: "label" }, "Expected"), expected),
     el("div", { class: "detail-row" }, el("span", { class: "label" }, "Heard"), phList(w.heard)),
+    wordCompare(w),
     steps ? el("button", {
       class: "ghost play small", type: "button", title: "Hear each expected sound, one at a time",
       onclick: () => playSequence([...expected.querySelectorAll("button.ph")].map((chip) => ({
@@ -449,9 +454,84 @@ function selectWord(index, text) {
   );
 }
 
+// Keep the last recording in the browser so it can be replayed next to the model voice.
+function setRecording(blob) {
+  if (state.recordingUrl) URL.revokeObjectURL(state.recordingUrl);
+  state.recordingUrl = blob ? URL.createObjectURL(blob) : null;
+  state.recordingBlob = blob || null;
+  state.recordingBuffer = null;  // decoded lazily, for word playback
+}
+
+let audioCtx = null;
+async function recordingBuffer() {
+  if (!state.recordingBuffer) {
+    audioCtx = audioCtx || new AudioContext();
+    const bytes = await state.recordingBlob.arrayBuffer();
+    state.recordingBuffer = await audioCtx.decodeAudioData(bytes);
+  }
+  return state.recordingBuffer;
+}
+
+// Play [start, end] seconds of the user's recording; resolves when done or stopped.
+async function playRecordingSlice([start, end], ctrl) {
+  const buffer = await recordingBuffer();
+  if (ctrl.signal.aborted) return;
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(audioCtx.destination);
+  clipSource = src;
+  await new Promise((resolve) => {
+    src.onended = resolve;
+    ctrl.signal.addEventListener("abort", resolve, { once: true });
+    src.start(0, Math.max(0, start), Math.max(0.05, end - start));
+  });
+  if (clipSource === src) clipSource = null;
+}
+
+function renderCompare() {
+  const box = $("compare");
+  const text = state.current && state.current.text;
+  if (!state.result || !state.recordingUrl || !text) { box.replaceChildren(); return; }
+  const you = el("button", { class: "ghost play small", type: "button", title: "Play your recording" },
+    playIcon(), "You");
+  const model = el("button", { class: "ghost play small", type: "button", title: "Play the model pronunciation" },
+    playIcon(), "Model");
+  const both = el("button", { class: "ghost play small", type: "button",
+    title: "Play your recording, then the model (C)" }, playIcon(), "You, then model");
+  const clip = (url, btn) => ({ url, before: () => btn.classList.add("playing"),
+                                after: () => btn.classList.remove("playing") });
+  you.addEventListener("click", () => playSequence([clip(state.recordingUrl, you)]));
+  model.addEventListener("click", () => playSequence([clip(ttsUrl(text, 0.9), model)]));
+  both.addEventListener("click", () =>
+    playSequence([clip(state.recordingUrl, both), clip(ttsUrl(text, 0.9), both)], 600));
+  box.replaceChildren(el("span", { class: "label" }, "Sentence"), you, model, both);
+}
+
+// "You" (this word cut from the recording) vs "Model" (the word spoken by Piper).
+function wordCompare(w) {
+  if (!state.recordingBlob) return "";
+  if (!w.heard_span) {
+    return el("div", { class: "detail-row muted" }, "This word was not heard in your recording.");
+  }
+  const clip = (btn, item) => ({ ...item, before: () => btn.classList.add("playing"),
+                                 after: () => btn.classList.remove("playing") });
+  const you = el("button", { class: "ghost play small", type: "button", title: `Your "${w.text}"` }, playIcon(), "You");
+  const model = el("button", { class: "ghost play small", type: "button", title: `Model "${w.text}"` }, playIcon(), "Model");
+  const both = el("button", { class: "ghost play small", type: "button", title: "Yours, then the model" },
+    playIcon(), "You, then model");
+  const mine = (btn) => clip(btn, { play: (ctrl) => playRecordingSlice(w.heard_span, ctrl) });
+  const theirs = (btn) => clip(btn, { url: ttsUrl(w.text, 0.8) });
+  you.addEventListener("click", () => playSequence([mine(you)]));
+  model.addEventListener("click", () => playSequence([theirs(model)]));
+  both.addEventListener("click", () => playSequence([mine(both), theirs(both)], 400));
+  return el("div", { class: "detail-row word-compare" }, el("span", { class: "label" }, "Word"), you, model, both);
+}
+
 function renderResult() {
   const r = state.result;
   $("result").classList.toggle("hidden", !r);
+  renderCompare();
   if (!r) return;
   const sc = $("score");
   sc.className = `score ${statusOf(r.accuracy)}`;
@@ -492,6 +572,7 @@ async function loadSentence(idx) {
   const q = idx == null ? "" : `?idx=${idx}`;
   state.current = await api(`/api/books/${state.bookId}/sentence${q}`);
   state.result = null;
+  setRecording(null);
   renderSentence();
   renderResult();
 }
@@ -506,7 +587,9 @@ async function openBook(id) {
 
 $("prev").addEventListener("click", () => state.current && loadSentence(state.current.idx - 1));
 $("next").addEventListener("click", () => state.current && loadSentence(state.current.idx + 1));
-$("retry").addEventListener("click", () => { state.result = null; renderSentence(); renderResult(); });
+$("retry").addEventListener("click", () => {
+  state.result = null; setRecording(null); renderSentence(); renderResult();
+});
 $("listen").addEventListener("click", () => state.current && speak(state.current.text));
 
 // ------------------------------------------------------------------ recording
@@ -532,7 +615,9 @@ async function startRecording() {
   rec.ondataavailable = (e) => e.data.size && state.chunks.push(e.data);
   rec.onstop = () => {
     stream.getTracks().forEach((t) => t.stop());
-    submitRecording(new Blob(state.chunks, { type: rec.mimeType || "audio/webm" }));
+    const blob = new Blob(state.chunks, { type: rec.mimeType || "audio/webm" });
+    setRecording(blob);
+    submitRecording(blob);
   };
   rec.start();
   state.recorder = rec;
@@ -585,6 +670,10 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); if (!e.repeat) toggleRecording(); }
   else if (e.key === "ArrowRight" && !state.recorder) $("next").click();
   else if (e.key === "ArrowLeft" && !state.recorder) $("prev").click();
+  else if ((e.key === "c" || e.key === "C") && !state.recorder && !e.ctrlKey && !e.metaKey && state.recordingUrl) {
+    const btn = $("compare").querySelector("button:last-of-type");
+    if (btn) btn.click();
+  }
 });
 
 // -------------------------------------------------------------------- library

@@ -40,6 +40,7 @@ class Op:
     expected: str | None
     actual: str | None
     exp_index: int | None  # index into the expected sequence (None for insertions)
+    act_index: int | None = None  # index into the recognized sequence (None for deletions)
 
 
 def align(expected: list[str], actual: list[str]) -> list[Op]:
@@ -69,13 +70,13 @@ def align(expected: list[str], actual: list[str]) -> list[Op]:
         if step == "M":
             e, a = expected[i - 1], actual[j - 1]
             kind = "match" if e == a else ("close" if is_close(e, a) else "substitution")
-            ops.append(Op(kind, e, a, i - 1))
+            ops.append(Op(kind, e, a, i - 1, j - 1))
             i, j = i - 1, j - 1
         elif step == "D":
             ops.append(Op("deletion", expected[i - 1], None, i - 1))
             i -= 1
         else:
-            ops.append(Op("insertion", None, actual[j - 1], None))
+            ops.append(Op("insertion", None, actual[j - 1], None, j - 1))
             j -= 1
     ops.reverse()
     return ops
@@ -101,6 +102,9 @@ class WordResult:
     score: float | None
     status: str  # good | unsure | bad | unknown
     errors: list[PhonemeError] = field(default_factory=list)
+    # [start, end] seconds of this word in the user's recording, when timings are known
+    # and something was heard for it.
+    heard_span: list[float] | None = None
 
 
 @dataclass
@@ -146,7 +150,18 @@ def _is_epenthesis(op: Op, nxt: int | None, flat: list[str], owner: list[int],
     )
 
 
-def score(expected_words: list[ExpectedWord], recognized: list[str]) -> ScoreResult:
+SPAN_PAD = 0.08  # seconds of context around a word's sounds when playing it back
+
+
+def score(expected_words: list[ExpectedWord], recognized: list[str],
+          spans: list[list[float]] | None = None, audio_seconds: float | None = None) -> ScoreResult:
+    """Score `recognized` against the expected words.
+
+    `spans` (optional) gives [start, end] seconds for each recognized phoneme; each word
+    then gets the span of the phonemes attributed to it (`heard_span`).
+    """
+    if spans is not None and len(spans) != len(recognized):
+        spans = None
     flat: list[str] = []
     owner: list[int] = []  # word index of each expected phoneme
     word_start: dict[int, int] = {}
@@ -161,6 +176,7 @@ def score(expected_words: list[ExpectedWord], recognized: list[str]) -> ScoreRes
     credit = [0.0] * nw
     inserted = [0] * nw
     heard: list[list[str]] = [[] for _ in range(nw)]
+    heard_idx: list[list[int]] = [[] for _ in range(nw)]
     word_errors: list[list[PhonemeError]] = [[] for _ in range(nw)]
 
     last_word = 0
@@ -183,6 +199,8 @@ def score(expected_words: list[ExpectedWord], recognized: list[str]) -> ScoreRes
             break
         if op.actual is not None:
             heard[wi].append(op.actual)
+            if op.act_index is not None:
+                heard_idx[wi].append(op.act_index)
         if op.kind == "match":
             credit[wi] += 1.0
             continue
@@ -227,7 +245,13 @@ def score(expected_words: list[ExpectedWord], recognized: list[str]) -> ScoreRes
             s = max(0.0, min(1.0, credit[wi] / den))
             total_credit += credit[wi]
             total_den += den
-        words.append(WordResult(w.text, wi, w.phonemes, heard[wi], s, status_for(s), word_errors[wi]))
+        span = None
+        if spans is not None and heard_idx[wi]:
+            start = min(spans[i][0] for i in heard_idx[wi]) - SPAN_PAD
+            end = max(spans[i][1] for i in heard_idx[wi]) + SPAN_PAD
+            limit = audio_seconds if audio_seconds is not None else end
+            span = [round(max(0.0, start), 3), round(min(limit, end), 3)]
+        words.append(WordResult(w.text, wi, w.phonemes, heard[wi], s, status_for(s), word_errors[wi], span))
 
     accuracy = total_credit / total_den if total_den else 0.0
     all_errors = [e for we in word_errors for e in we]

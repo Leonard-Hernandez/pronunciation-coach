@@ -126,6 +126,14 @@ main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
 .table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .empty { text-align: center; color: var(--muted); padding: 64px 0; }
 
+.compare { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
+.compare:empty { display: none; }
+.word-compare { gap: 6px; }
+.word-compare .play.small { margin: 0; }
+.compare .label { margin-right: 4px; }
+.compare .play.small { margin: 0; }
+.play.small.playing { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+
 /* ---------------------------------------------------------------- phonemes */
 :root { --hard: #a34a1a; --ipa: "Noto Sans", "DejaVu Sans", "Charis SIL", "Doulos SIL", sans-serif; }
 @media (prefers-color-scheme: dark) { :root { --hard: #f0a46b; } }

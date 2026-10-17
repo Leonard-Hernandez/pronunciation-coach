@@ -21,6 +21,27 @@ log = logging.getLogger("pronunciation_coach.worker")
 _SPECIAL = {"<pad>", "<s>", "</s>", "<unk>", "|"}
 
 
+def ctc_collapse(ids: list[int], token_of, frame_seconds: float) -> tuple[list[str], list[list[float]]]:
+    """Greedy CTC decoding that keeps time: each token with the [start, end] seconds of its run.
+
+    Runs of the same id collapse into one token; special tokens (pad/blank, word
+    separator) are dropped. Torch-free, so it can be unit-tested.
+    """
+    tokens: list[str] = []
+    spans: list[list[float]] = []
+    i, n = 0, len(ids)
+    while i < n:
+        j = i
+        while j + 1 < n and ids[j + 1] == ids[i]:
+            j += 1
+        tok = token_of(ids[i])
+        if tok not in _SPECIAL:
+            tokens.append(tok)
+            spans.append([round(i * frame_seconds, 3), round((j + 1) * frame_seconds, 3)])
+        i = j + 1
+    return tokens, spans
+
+
 # --------------------------------------------------------------------------- child
 
 
@@ -66,16 +87,11 @@ def worker_main(conn, model_name: str, device_pref: str, idle_timeout: float) ->
                 with torch.inference_mode():
                     logits = model(inputs.input_values.to(device)).logits
                 ids = torch.argmax(logits, dim=-1)[0].tolist()
-                tokens: list[str] = []
-                prev = None
-                for i in ids:
-                    if i != prev:
-                        tok = tokenizer.convert_ids_to_tokens(i)
-                        if tok not in _SPECIAL:
-                            tokens.append(tok)
-                    prev = i
+                frame_seconds = (len(audio) / 16000) / max(len(ids), 1)
+                tokens, spans = ctc_collapse(ids, tokenizer.convert_ids_to_tokens, frame_seconds)
                 conn.send({
-                    "type": "result", "id": req_id, "phonemes": " ".join(tokens),
+                    "type": "result", "id": req_id, "phonemes": " ".join(tokens), "spans": spans,
+                    "audio_seconds": len(audio) / 16000,
                     "device": device, "device_name": device_name,
                     "infer_seconds": time.monotonic() - t1,
                 })

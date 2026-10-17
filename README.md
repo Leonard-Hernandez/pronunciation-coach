@@ -22,6 +22,10 @@ I have 25 years → I am 25 years old  ← writing, with the rule explained in S
   sentences and remembers where you stopped.
 - **Phoneme-level scoring.** Record a sentence (`Space`) and get an accuracy score, the words
   colored green / amber / red, and specific corrections such as `think: said /t/, expected /θ/`.
+- **You vs the model.** After each recording, play your own take, the model voice, or both
+  back to back (`C`). Click a word to compare **just that word**: the recognizer's phoneme
+  timings cut your word out of the recording and play it next to the model's. The recording
+  stays in your browser.
 - **Hear the difference.** Click any word to hear it slowly. Click any /sound/ to hear it on
   its own: 41 of 47 sounds are **human recordings** from Wikimedia Commons, not synthetic.
 - **Sounds library.** A card for every sound of American English: how to make it (in

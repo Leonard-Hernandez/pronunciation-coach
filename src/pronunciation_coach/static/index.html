@@ -40,13 +40,14 @@
           <button id="retry" class="ghost" title="Clear result and try again">Retry</button>
           <button id="next" class="ghost" title="Next sentence (→)">Next &rarr;</button>
         </div>
-        <p class="hint">Space: start/stop recording &middot; Click a word to hear it and see its sounds &middot; Click a /sound/ to hear it</p>
+        <p class="hint">Space: start/stop recording &middot; Click a word to hear it and see its sounds &middot; Click a /sound/ to hear it &middot; C: you, then model</p>
 
         <div id="result" class="result hidden">
           <div class="score-row">
             <div id="score" class="score"></div>
             <div id="word-detail" class="word-detail"></div>
           </div>
+          <div id="compare" class="compare" role="group" aria-label="Compare your recording with the model"></div>
           <h2>Corrections</h2>
           <ul id="errors" class="errors"></ul>
           <details class="raw">
