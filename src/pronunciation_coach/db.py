@@ -120,22 +120,68 @@ class Database:
                  chapters: list[tuple[str, int]] = (), page_starts: list[int] | None = None) -> int:
         """Chapters are (title, start sentence); page_starts are stored only for real (PDF) pages."""
         with self._conn:
-            cur = self._conn.execute(
-                "INSERT INTO books (title, filename, created_at, sentence_count, last_opened_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (title, filename, _now(), len(sentences), _now()),
+            return self._insert_book(title, filename, sentences, chapters, page_starts)
+
+    def _insert_book(self, title: str, filename: str, sentences: list[str],
+                     chapters: list[tuple[str, int]], page_starts: list[int] | None) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO books (title, filename, created_at, sentence_count, last_opened_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (title, filename, _now(), len(sentences), _now()),
+        )
+        self._insert_content(cur.lastrowid, sentences, chapters, page_starts)
+        return cur.lastrowid
+
+    @staticmethod
+    def _remap_position(old_text: str | None, old_idx: int, sentences: list[str]) -> int:
+        """Find the old current sentence in the new text (nearest match wins), else clamp."""
+        matches = [i for i, s in enumerate(sentences) if s == old_text] if old_text is not None else []
+        if matches:
+            return min(matches, key=lambda i: (abs(i - old_idx), i))
+        return max(0, min(old_idx, len(sentences) - 1))
+
+    @_locked
+    def replace_book_by_filename(self, title: str, filename: str, sentences: list[str],
+                                 chapters: list[tuple[str, int]] = (),
+                                 page_starts: list[int] | None = None) -> tuple[int, bool]:
+        """Add a book, or re-import it in place when a book with this exact filename exists.
+
+        An existing book keeps its id, attempts and last_opened_at; its sentences and sections
+        are replaced and the reading position follows the current sentence's text. With several
+        matches, the most recently opened one is updated. Returns (book_id, updated).
+        """
+        with self._conn:
+            row = self._conn.execute(
+                "SELECT id, position FROM books WHERE filename = ?"
+                " ORDER BY COALESCE(last_opened_at, created_at) DESC, id DESC LIMIT 1", (filename,),
+            ).fetchone()
+            if row is None:
+                return self._insert_book(title, filename, sentences, chapters, page_starts), False
+            book_id, old_idx = row["id"], row["position"]
+            old = self._conn.execute(
+                "SELECT text FROM sentences WHERE book_id = ? AND idx = ?", (book_id, old_idx),
+            ).fetchone()
+            position = self._remap_position(old["text"] if old else None, old_idx, sentences)
+            self._conn.execute("DELETE FROM sentences WHERE book_id = ?", (book_id,))
+            self._conn.execute("DELETE FROM sections WHERE book_id = ?", (book_id,))
+            self._conn.execute(
+                "UPDATE books SET title = ?, sentence_count = ?, position = ? WHERE id = ?",
+                (title, len(sentences), position, book_id),
             )
-            book_id = cur.lastrowid
-            self._conn.executemany(
-                "INSERT INTO sentences (book_id, idx, text) VALUES (?, ?, ?)",
-                [(book_id, i, s) for i, s in enumerate(sentences)],
-            )
-            self._conn.executemany(
-                "INSERT INTO sections (book_id, kind, idx, title, start_sentence) VALUES (?,?,?,?,?)",
-                [(book_id, "chapter", i, t, start) for i, (t, start) in enumerate(chapters)]
-                + [(book_id, "page", i, str(i + 1), start) for i, start in enumerate(page_starts or [])],
-            )
-            return book_id
+            self._insert_content(book_id, sentences, chapters, page_starts)
+            return book_id, True
+
+    def _insert_content(self, book_id: int, sentences: list[str],
+                        chapters: list[tuple[str, int]], page_starts: list[int] | None) -> None:
+        self._conn.executemany(
+            "INSERT INTO sentences (book_id, idx, text) VALUES (?, ?, ?)",
+            [(book_id, i, s) for i, s in enumerate(sentences)],
+        )
+        self._conn.executemany(
+            "INSERT INTO sections (book_id, kind, idx, title, start_sentence) VALUES (?,?,?,?,?)",
+            [(book_id, "chapter", i, t, start) for i, (t, start) in enumerate(chapters)]
+            + [(book_id, "page", i, str(i + 1), start) for i, start in enumerate(page_starts or [])],
+        )
 
     @_locked
     def sections(self, book_id: int, kind: str) -> list[dict]:
@@ -172,10 +218,15 @@ class Database:
     @_locked
     def list_books(self) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT id, title, filename, created_at, position, sentence_count, last_opened_at"
+            "SELECT id, title, filename, created_at, position, sentence_count, last_opened_at,"
+            " EXISTS (SELECT 1 FROM sections s WHERE s.book_id = books.id AND s.kind = 'chapter')"
+            " AS has_chapters,"
+            " EXISTS (SELECT 1 FROM sections s WHERE s.book_id = books.id AND s.kind = 'page')"
+            " AS has_pages"
             " FROM books ORDER BY COALESCE(last_opened_at, created_at) DESC"
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) | {"has_chapters": bool(r["has_chapters"]), "has_pages": bool(r["has_pages"])}
+                for r in rows]
 
     @_locked
     def get_book(self, book_id: int) -> dict | None:

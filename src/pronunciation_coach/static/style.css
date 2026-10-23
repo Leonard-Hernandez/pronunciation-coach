@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   --bg: #f6f6f3;
   --surface: #ffffff;
   --text: #1d1f23;
@@ -52,18 +53,43 @@ main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
 .panel { display: none; }
 .panel.active { display: block; }
 
-.book-line { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 14px; }
-.book-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; color: var(--muted); }
-.book-nav select { flex: 1 1 200px; min-width: 0; max-width: 420px; padding: 6px 10px; min-height: 36px; text-overflow: ellipsis; }
-.pager { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-.pager .ghost { padding: 4px 12px; min-height: 36px; }
-.pager .ghost:disabled { opacity: .45; cursor: default; }
+/* reader navigation: where you are in the book, and how to move through it */
+.reader-nav { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.reader-head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 16px; flex-wrap: wrap; }
+.reader-title {
+  flex: 1 1 16rem; min-width: 0; margin: 0; font-size: 18px; line-height: 1.3; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reader-progress { flex: none; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.reader-controls { display: flex; align-items: flex-end; gap: 12px 16px; flex-wrap: wrap; }
+.nav-field { display: grid; gap: 6px; min-width: 0; }
+.nav-field .label { margin: 0; font-variant-numeric: tabular-nums; }
+.chapter-field { flex: 1 1 260px; max-width: 520px; }
+.page-field { flex: none; margin-left: auto; }
+.select-wrap { position: relative; min-width: 0; }
+.select-wrap select {
+  appearance: none; width: 100%; min-height: 42px; padding: 8px 40px 8px 12px;
+  font-weight: 600; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+  box-shadow: var(--shadow); cursor: pointer; transition: border-color .15s;
+}
+.select-wrap select:hover { border-color: var(--muted); }
+.select-caret {
+  position: absolute; right: 14px; top: 50%; width: 14px; height: 14px; margin-top: -7px; pointer-events: none;
+  fill: none; stroke: var(--muted); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round;
+}
+.pager { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.icon-btn { display: inline-grid; place-items: center; width: 42px; height: 42px; padding: 0; }
+.icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn:disabled { opacity: .45; cursor: default; }
+.icon-btn:disabled:hover { border-color: var(--border); }
 .pager input {
-  width: 4.5em; padding: 6px 8px; min-height: 36px; text-align: center; font: inherit; font-variant-numeric: tabular-nums;
+  appearance: textfield; -moz-appearance: textfield; width: 4.5em; min-height: 42px; padding: 8px; text-align: center;
+  font: inherit; font-weight: 600; font-variant-numeric: tabular-nums;
   color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
 }
+.pager input::-webkit-inner-spin-button, .pager input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .pager input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-#page-count { font-variant-numeric: tabular-nums; }
+.page-of { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sentence {
   font-size: clamp(24px, 3.4vw, 34px); line-height: 1.45; margin: 24px 0 32px;
   font-family: Georgia, "Iowan Old Style", serif; min-height: 3em;
@@ -115,20 +141,28 @@ main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
 #upload textarea { width: 100%; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 #upload button { justify-self: start; }
 .books { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.books li { display: flex; align-items: center; gap: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
-.books .info { flex: 1; min-width: 0; display: grid; }
+.books li {
+  display: grid; grid-template-columns: minmax(0, 1fr) 120px auto; align-items: center; gap: 10px 20px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+}
+.books li.muted { display: block; }
+.books .info { min-width: 0; display: grid; gap: 2px; }
 .books .title, .books .meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .books .title { font-weight: 600; }
 .books .meta { color: var(--muted); font-size: 13px; }
-@media (max-width: 600px) {
-  .books li { flex-wrap: wrap; gap: 8px 12px; }
-  .books .info { flex-basis: 100%; }
-  .books .bar { flex: 1; }
-  .pager { margin-left: 0; }
-}
-.bar { height: 4px; background: var(--border); border-radius: 2px; width: 80px; overflow: hidden; }
+.book-hint { color: var(--muted); font-size: 12px; font-style: italic; }
+.book-progress { display: flex; align-items: center; gap: 8px; }
+.book-progress .pct { min-width: 4ch; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.book-actions { display: flex; gap: 8px; }
+.bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
 .bar span { display: block; height: 100%; background: var(--accent); }
-
+@media (max-width: 600px) {
+  .books li { grid-template-columns: minmax(0, 1fr) auto; }
+  .books .info { grid-column: 1 / -1; }
+  .reader-controls { align-items: stretch; }
+  .chapter-field { flex-basis: 100%; max-width: none; }
+  .page-field { margin-left: 0; }
+}
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
 .kpi .v { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }

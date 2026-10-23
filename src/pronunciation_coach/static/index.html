@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pronunciation Coach</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
 </head>
 <body>
   <header class="topbar">
@@ -26,18 +26,34 @@
         <p>No book yet. Add one in the <a href="#" data-goto="library">Library</a>.</p>
       </div>
       <div id="practice" class="hidden">
-        <div class="book-line">
-          <span id="book-title"></span>
-          <span id="progress"></span>
-        </div>
-        <div class="book-nav">
-          <select id="chapter" class="hidden" aria-label="Chapter"></select>
-          <div class="pager">
-            <button id="prev-page" class="ghost" title="Previous page" aria-label="Previous page">&lsaquo;</button>
-            <label>Page <input id="page" type="number" min="1" inputmode="numeric" aria-label="Page number"> of <span id="page-count"></span></label>
-            <button id="next-page" class="ghost" title="Next page" aria-label="Next page">&rsaquo;</button>
+        <nav class="reader-nav" aria-label="Book navigation">
+          <div class="reader-head">
+            <h2 id="book-title" class="reader-title"></h2>
+            <span id="progress" class="reader-progress"></span>
           </div>
-        </div>
+          <div class="reader-controls">
+            <div id="chapter-field" class="nav-field chapter-field hidden">
+              <label for="chapter" id="chapter-label" class="label">Chapter</label>
+              <div class="select-wrap">
+                <select id="chapter"></select>
+                <svg class="select-caret" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+              </div>
+            </div>
+            <div class="nav-field page-field">
+              <label for="page" class="label">Page</label>
+              <div class="pager">
+                <button id="prev-page" class="ghost icon-btn" type="button" title="Previous page" aria-label="Previous page">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5"/></svg>
+                </button>
+                <input id="page" type="number" min="1" inputmode="numeric" enterkeyhint="go" autocomplete="off">
+                <span class="page-of">of <span id="page-count"></span></span>
+                <button id="next-page" class="ghost icon-btn" type="button" title="Next page" aria-label="Next page">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </nav>
         <p id="sentence" class="sentence"></p>
         <div class="controls">
           <button id="prev" class="ghost" title="Previous sentence (←)">&larr; Prev</button>
@@ -214,7 +230,7 @@
   </main>
 
   <aside id="ph-pop" class="ph-pop hidden" role="dialog" aria-label="Sound guide"></aside>
-  <script src="/static/app.js"></script>
-  <script src="/static/writing.js"></script>
+  <script src="/static/app.js?v=__ASSET_VERSION__"></script>
+  <script src="/static/writing.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

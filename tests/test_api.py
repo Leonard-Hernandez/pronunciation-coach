@@ -177,3 +177,74 @@ def test_worker_status(client):
 def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "Pronunciation Coach" in r.text
+    assert r.headers["cache-control"] == "no-cache"
+    version = server.asset_version()
+    assert len(version) == 12 and server.ASSET_VERSION_PLACEHOLDER not in r.text
+    for asset in ("app.js", "writing.js", "style.css"):
+        assert f"/static/{asset}?v={version}" in r.text
+    assert client.get(f"/static/app.js?v={version}").status_code == 200
+
+
+def _upload(client, name, text):
+    return client.post("/api/books", files={"file": (name, io.BytesIO(text.encode()), "text/plain")})
+
+
+def test_reupload_updates_book_in_place(client):
+    db = client.db
+    old = [f"Line {i} is here." for i in range(30)]
+    # A book imported before chapters existed: same file name, no sections.
+    book_id = db.add_book("Novel", "novel.txt", old)
+    db.set_position(book_id, 12)
+    db.add_attempt(book_id=book_id, sentence_idx=12, sentence=old[12], accuracy=0.5, session_id="s",
+                   expected=[], recognized=[], words=[], errors=[])
+    opened = db.get_book(book_id)["last_opened_at"]
+    assert client.get("/api/books").json()["books"][0]["has_chapters"] is False
+
+    text = "\n\n".join(["Preface text is here.", "Chapter 1"] + old[:10] + ["Chapter 2"] + old[10:])
+    r = _upload(client, "novel.txt", text)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"id": book_id, "title": "novel", "sentence_count": 33, "updated": True}
+
+    books = client.get("/api/books").json()["books"]
+    assert len(books) == 1 and books[0]["has_chapters"] is True
+    book = db.get_book(book_id)
+    assert book["position"] == 15 and db.get_sentence(book_id, 15) == old[12]
+    assert book["last_opened_at"] == opened
+    assert db.stats()["overall"]["attempts"] == 1
+    toc = client.get(f"/api/books/{book_id}/toc").json()
+    assert [c["title"] for c in toc["chapters"]] == ["Chapter 1", "Chapter 2"]
+    assert toc["chapters"][0]["start"] == 1
+    s = client.get(f"/api/books/{book_id}/sentence").json()
+    assert s["idx"] == 15 and s["chapter"]["title"] == "Chapter 2"
+
+
+def test_reupload_position_fallbacks():
+    remap = Database._remap_position
+    assert remap("B.", 5, ["B.", "x", "x", "x", "x", "x", "B.", "x"]) == 6  # nearest duplicate
+    assert remap("Gone.", 5, ["a", "b", "c"]) == 2                          # clamped
+    assert remap("Gone.", 1, ["a", "b", "c"]) == 1
+
+
+def test_reupload_without_match_clamps(client):
+    book_id = _upload(client, "short.txt", " ".join(f"Old {i} here." for i in range(20))).json()["id"]
+    client.post(f"/api/books/{book_id}/position", json={"idx": 15})
+    r = _upload(client, "short.txt", "New one here. New two here.").json()
+    assert r["id"] == book_id and r["updated"] is True
+    assert client.db.get_book(book_id)["position"] == 1
+
+
+def test_pasted_text_never_dedupes(client):
+    a = client.post("/api/books", data={"text": "Same text here."}).json()
+    b = client.post("/api/books", data={"text": "Same text here."}).json()
+    assert a["id"] != b["id"] and a["updated"] is False and b["updated"] is False
+    # A file that happens to be called like pasted text does not replace a pasted book either.
+    c = _upload(client, "pasted.txt", "Other text here.").json()
+    assert c["id"] not in (a["id"], b["id"]) and c["updated"] is False
+    assert len(client.get("/api/books").json()["books"]) == 3
+
+
+def test_different_filenames_create_books(client):
+    a = _upload(client, "a.txt", "One here.").json()
+    b = _upload(client, "b.txt", "One here.").json()
+    assert a["id"] != b["id"] and not b["updated"]

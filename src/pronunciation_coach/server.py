@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,6 +31,22 @@ from .worker import RecognizerClient, RecognizerError
 log = logging.getLogger("pronunciation_coach")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+PASTED_FILENAME = "pasted.txt"
+VERSIONED_ASSETS = ("app.js", "writing.js", "style.css")
+ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
+
+
+def asset_version() -> str:
+    """Short content hash of the static assets, so browsers fetch them again after a change."""
+    digest = hashlib.sha256()
+    for name in VERSIONED_ASSETS:
+        digest.update((STATIC_DIR / name).read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def render_index() -> str:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    return html.replace(ASSET_VERSION_PLACEHOLDER, asset_version())
 
 
 class Position(BaseModel):
@@ -129,6 +146,7 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
         state["db"].close()
 
     app = FastAPI(title="Pronunciation Coach", lifespan=lifespan)
+    index_html = render_index()  # computed once: assets only change with a restart
 
     def _db() -> Database:
         return state["db"]
@@ -196,14 +214,22 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
             book_title, filename = extracted.title, file.filename
             book = layout(extracted.paragraphs, extracted.real_pages)
         elif text and text.strip():
-            book_title, filename = "Pasted text", "pasted.txt"
+            book_title, filename = "Pasted text", PASTED_FILENAME
             book = layout(text_paragraphs(text))
         else:
             raise HTTPException(400, "send a file or some text")
         if not book.sentences:
             raise HTTPException(422, "no readable sentences found")
-        book_id = _db().add_book(title or book_title, filename, book.sentences, book.chapters, book.page_starts)
-        return {"id": book_id, "title": title or book_title, "sentence_count": len(book.sentences)}
+        book_title = title or book_title
+        if file is not None and file.filename and filename != PASTED_FILENAME:
+            # Re-uploading the same file refreshes that book (e.g. to gain chapters) in place.
+            book_id, updated = _db().replace_book_by_filename(
+                book_title, filename, book.sentences, book.chapters, book.page_starts)
+        else:
+            book_id, updated = _db().add_book(
+                book_title, filename, book.sentences, book.chapters, book.page_starts), False
+        return {"id": book_id, "title": book_title, "sentence_count": len(book.sentences),
+                "updated": updated}
 
     @app.delete("/api/books/{book_id}")
     def delete_book(book_id: int):
@@ -420,7 +446,7 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

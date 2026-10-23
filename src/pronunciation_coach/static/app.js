@@ -39,6 +39,7 @@ function el(tag, attrs = {}, ...children) {
 }
 
 function pct(x) { return x == null ? "–" : `${Math.round(x * 100)}%`; }
+const fmt = (n) => Number(n).toLocaleString("en-US");
 function statusOf(x) { return x >= 0.8 ? "good" : x >= 0.5 ? "unsure" : "bad"; }
 
 // --------------------------------------------------------------------- tabs
@@ -424,30 +425,37 @@ function renderSentence() {
     box.append(span);
   }
   $("book-title").textContent = s.title;
-  $("progress").textContent = `Sentence ${s.idx + 1} of ${s.total}`;
+  $("progress").textContent = `Sentence ${fmt(s.idx + 1)} of ${fmt(s.total)}`;
   $("prev").disabled = s.idx <= 0;
   $("next").disabled = s.idx >= s.total - 1;
   renderBookNav();
 }
 
+const FRONT_MATTER = "Front matter";
+
 function renderBookNav() {
   const s = state.current;
-  const select = $("chapter");
-  if (s.chapter) select.value = String(s.chapter.idx);
-  else if (select.options.length) select.selectedIndex = -1;
+  const chapters = state.toc ? state.toc.chapters : [];
+  // Before the first chapter the disabled "Front matter" option stands in for a chapter.
+  $("chapter").value = s.chapter ? String(s.chapter.idx) : "";
+  $("chapter-label").textContent = s.chapter
+    ? `Chapter ${s.chapter.idx + 1} of ${chapters.length}` : `Before chapter 1 of ${chapters.length}`;
   const page = $("page");
   page.max = s.page_count;
-  if (document.activeElement !== page) page.value = s.page;
-  $("page-count").textContent = s.page_count;
+  page.value = s.page;
+  $("page-count").textContent = fmt(s.page_count);
   $("prev-page").disabled = s.page <= 1;
   $("next-page").disabled = s.page >= s.page_count;
 }
 
 function renderToc() {
   const chapters = state.toc ? state.toc.chapters : [];
-  const select = $("chapter");
-  select.replaceChildren(...chapters.map((c) => el("option", { value: c.idx }, c.title)));
-  select.classList.toggle("hidden", !chapters.length);
+  const options = chapters.map((c) => el("option", { value: c.idx }, `${c.idx + 1}. ${c.title}`));
+  if (chapters.length && chapters[0].start > 0) {
+    options.unshift(el("option", { value: "", disabled: "" }, FRONT_MATTER));
+  }
+  $("chapter").replaceChildren(...options);
+  $("chapter-field").classList.toggle("hidden", !chapters.length);
 }
 
 function selectWord(index, text) {
@@ -625,13 +633,29 @@ async function openBook(id) {
   showTab("practice");
 }
 
-$("chapter").addEventListener("change", (e) => jumpTo({ chapter: Number(e.target.value) }));
-$("page").addEventListener("change", (e) => {
-  const n = Math.round(Number(e.target.value));
-  if (!state.current || !n || n === state.current.page) return renderBookNav();
-  jumpTo({ page: Math.max(1, Math.min(n, state.current.page_count)) });
+$("chapter").addEventListener("change", (e) => {
+  if (e.target.value !== "") jumpTo({ chapter: Number(e.target.value) });
 });
-$("page").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+
+// Typed page numbers jump on Enter or when the field loses focus; out-of-range values clamp
+// and anything unreadable reverts to the current page.
+let pendingPage = null;
+async function commitPage() {
+  const s = state.current;
+  if (!s) return;
+  const raw = $("page").value.trim();
+  const n = Math.round(Number(raw));
+  if (!raw || !Number.isFinite(n)) return renderBookNav();
+  const target = Math.max(1, Math.min(n, s.page_count));
+  if (target === s.page || target === pendingPage) return renderBookNav();
+  pendingPage = target;
+  try { await jumpTo({ page: target }); } finally { pendingPage = null; }
+}
+$("page").addEventListener("change", commitPage);
+$("page").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); commitPage(); }
+  else if (e.key === "Escape") { renderBookNav(); e.target.blur(); }
+});
 $("prev-page").addEventListener("click", () => state.current && jumpTo({ page: state.current.page - 1 }));
 $("next-page").addEventListener("click", () => state.current && jumpTo({ page: state.current.page + 1 }));
 
@@ -734,23 +758,32 @@ async function loadBooks() {
   if (!books.length) list.append(el("li", { class: "muted" }, "No books yet."));
   for (const b of books) {
     const progress = b.sentence_count ? (b.position + 1) / b.sentence_count : 0;
-    const where = `${b.chapter ? `Ch. ${b.chapter.idx + 1} · ${b.chapter.title} — ` : ""}p. ${b.page}/${b.page_count}`;
+    const section = b.chapter ? `Ch. ${b.chapter.idx + 1} · ${b.chapter.title} — `
+      : b.has_chapters ? `${FRONT_MATTER} — ` : "";
+    const where = `${section}p. ${fmt(b.page)}/${fmt(b.page_count)}`;
+    // Books imported before chapters existed only gain them by importing the file again.
+    const ext = (b.filename.match(/\.(epub|pdf)$/i) || [])[1];
+    const stale = ext && !b.has_chapters && (ext.toLowerCase() === "epub" || !b.has_pages);
     list.append(el("li", {},
-      el("span", { class: "info" },
+      el("div", { class: "info" },
         el("span", { class: "title", title: b.title }, b.title),
-        el("span", { class: "meta", title: where }, where)),
-      el("span", { class: "bar", title: `Sentence ${b.position + 1} of ${b.sentence_count}` },
-        Object.assign(el("span"), { style: `width:${progress * 100}%` })),
-      el("button", { class: "primary", onclick: () => openBook(b.id) }, "Read"),
-      el("button", {
-        class: "ghost", title: "Delete book",
-        onclick: async () => {
-          if (!confirm(`Delete "${b.title}"? Attempt history is kept.`)) return;
-          await api(`/api/books/${b.id}`, { method: "DELETE" });
-          if (state.bookId === b.id) { state.bookId = null; state.current = null; state.toc = null; init(); }
-          loadBooks();
-        },
-      }, "Delete"),
+        el("span", { class: "meta", title: where }, where),
+        stale ? el("span", { class: "book-hint" }, "Re-upload the file to enable chapters") : ""),
+      el("div", { class: "book-progress", title: `Sentence ${fmt(b.position + 1)} of ${fmt(b.sentence_count)}` },
+        el("span", { class: "bar", "aria-hidden": "true" },
+          Object.assign(el("span"), { style: `width:${progress * 100}%` })),
+        el("span", { class: "pct" }, `${Math.floor(progress * 100)}%`)),
+      el("div", { class: "book-actions" },
+        el("button", { class: "primary", type: "button", onclick: () => openBook(b.id) }, "Read"),
+        el("button", {
+          class: "ghost", type: "button", "aria-label": `Delete ${b.title}`,
+          onclick: async () => {
+            if (!confirm(`Delete "${b.title}"? Attempt history is kept.`)) return;
+            await api(`/api/books/${b.id}`, { method: "DELETE" });
+            if (state.bookId === b.id) { state.bookId = null; state.current = null; state.toc = null; init(); }
+            loadBooks();
+          },
+        }, "Delete")),
     ));
   }
 }
@@ -766,10 +799,13 @@ $("upload").addEventListener("submit", async (e) => {
   setStatus("Importing…");
   try {
     const book = await api("/api/books", { method: "POST", body: form });
-    setStatus(`Added "${book.title}" (${book.sentence_count} sentences)`);
     $("file").value = "";
     $("paste").value = "";
-    loadBooks();
+    await openBook(book.id);
+    const chapters = state.toc && state.toc.chapters.length;
+    setStatus(book.updated
+      ? `Updated "${book.title}"${chapters ? " — chapters now available" : ""}`
+      : `Added "${book.title}" (${fmt(book.sentence_count)} sentences)`);
   } catch (err) {
     setStatus(`Error: ${err.message}`);
   }
