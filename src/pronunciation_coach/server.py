@@ -14,7 +14,9 @@ from pydantic import BaseModel
 
 from . import config
 from .audio import AudioError, decode_to_16k_mono
-from .books import UnsupportedFormat, extract, split_sentences
+from .books import (
+    SENTENCES_PER_PAGE, UnsupportedFormat, extract_book, layout, text_paragraphs, virtual_page_count,
+)
 from .db import Database
 from .phonemes import EspeakUnavailable, espeak_available, expected_for_sentence, split_words, tokenize_ipa
 from .scoring import score
@@ -32,6 +34,11 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 class Position(BaseModel):
     idx: int
+
+
+class Jump(BaseModel):
+    chapter: int | None = None  # 0-based chapter index
+    page: int | None = None     # 1-based page number
 
 
 class CorrectRequest(BaseModel):
@@ -126,6 +133,25 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
     def _db() -> Database:
         return state["db"]
 
+    def _page_starts(book: dict) -> tuple[list[int], bool]:
+        real = [p["start"] for p in _db().sections(book["id"], "page")]
+        if real:
+            return real, True
+        # Books without stored pages (non-PDF, or added before sections existed) get virtual ones.
+        return list(range(0, book["sentence_count"], SENTENCES_PER_PAGE)) or [0], False
+
+    def _locate(book: dict, idx: int) -> dict:
+        chapter = _db().section_at(book["id"], "chapter", idx)
+        page_count = _db().section_count(book["id"], "page")
+        if page_count:
+            page = _db().section_at(book["id"], "page", idx)
+            page = page["idx"] + 1 if page else 1
+        else:
+            page_count = virtual_page_count(book["sentence_count"])
+            page = min(idx // SENTENCES_PER_PAGE + 1, page_count)
+        return {"chapter": {"idx": chapter["idx"], "title": chapter["title"]} if chapter else None,
+                "page": page, "page_count": page_count}
+
     def _sentence_payload(book: dict, idx: int) -> dict:
         idx = max(0, min(idx, max(book["sentence_count"] - 1, 0)))
         text = _db().get_sentence(book["id"], idx) or ""
@@ -133,7 +159,13 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
             "book_id": book["id"], "title": book["title"], "idx": idx,
             "total": book["sentence_count"], "text": text,
             "segments": [asdict(s) for s in split_words(text)],
-        }
+        } | _locate(book, idx)
+
+    def _book_or_404(book_id: int) -> dict:
+        book = _db().get_book(book_id)
+        if not book:
+            raise HTTPException(404, "book not found")
+        return book
 
     @app.get("/api/health")
     def health():
@@ -144,7 +176,8 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
 
     @app.get("/api/books")
     def list_books():
-        return {"books": _db().list_books(), "last_book_id": _db().last_book_id()}
+        books = [b | _locate(b, b["position"]) for b in _db().list_books()]
+        return {"books": books, "last_book_id": _db().last_book_id()}
 
     @app.post("/api/books")
     async def upload_book(file: UploadFile | None = File(None), text: str | None = Form(None),
@@ -154,22 +187,23 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
             if len(data) > MAX_UPLOAD_BYTES:
                 raise HTTPException(413, "file too large")
             try:
-                book_title, paragraphs = extract(file.filename, data)
+                extracted = extract_book(file.filename, data)
             except UnsupportedFormat as exc:
                 raise HTTPException(415, str(exc)) from exc
             except Exception as exc:
                 log.exception("extraction failed")
                 raise HTTPException(422, f"could not read {file.filename}: {exc}") from exc
-            filename = file.filename
+            book_title, filename = extracted.title, file.filename
+            book = layout(extracted.paragraphs, extracted.real_pages)
         elif text and text.strip():
-            book_title, paragraphs, filename = "Pasted text", text, "pasted.txt"
+            book_title, filename = "Pasted text", "pasted.txt"
+            book = layout(text_paragraphs(text))
         else:
             raise HTTPException(400, "send a file or some text")
-        sentences = split_sentences(paragraphs)
-        if not sentences:
+        if not book.sentences:
             raise HTTPException(422, "no readable sentences found")
-        book_id = _db().add_book(title or book_title, filename, sentences)
-        return {"id": book_id, "title": title or book_title, "sentence_count": len(sentences)}
+        book_id = _db().add_book(title or book_title, filename, book.sentences, book.chapters, book.page_starts)
+        return {"id": book_id, "title": title or book_title, "sentence_count": len(book.sentences)}
 
     @app.delete("/api/books/{book_id}")
     def delete_book(book_id: int):
@@ -177,20 +211,42 @@ def create_app(db: Database | None = None, recognizer: RecognizerClient | None =
             raise HTTPException(404, "book not found")
         return {"ok": True}
 
+    @app.get("/api/books/{book_id}/toc")
+    def get_toc(book_id: int):
+        book = _book_or_404(book_id)
+        page_starts, real_pages = _page_starts(book)
+        return {"chapters": _db().sections(book_id, "chapter"), "page_starts": page_starts,
+                "page_count": len(page_starts), "real_pages": real_pages, "total": book["sentence_count"]}
+
+    @app.post("/api/books/{book_id}/jump")
+    def jump(book_id: int, target: Jump):
+        book = _book_or_404(book_id)
+        if (target.chapter is None) == (target.page is None):
+            raise HTTPException(422, "send either chapter or page")
+        if target.chapter is not None:
+            chapter = _db().section(book_id, "chapter", target.chapter)
+            if not chapter:
+                raise HTTPException(404, "chapter not found")
+            start = chapter["start"]
+        else:
+            page_starts, _ = _page_starts(book)
+            if not 1 <= target.page <= len(page_starts):
+                raise HTTPException(404, "page not found")
+            start = page_starts[target.page - 1]
+        payload = _sentence_payload(book, start)
+        _db().set_position(book_id, payload["idx"])
+        return payload
+
     @app.get("/api/books/{book_id}/sentence")
     def get_sentence(book_id: int, idx: int | None = None):
-        book = _db().get_book(book_id)
-        if not book:
-            raise HTTPException(404, "book not found")
+        book = _book_or_404(book_id)
         payload = _sentence_payload(book, book["position"] if idx is None else idx)
         _db().set_position(book_id, payload["idx"])
         return payload
 
     @app.post("/api/books/{book_id}/position")
     def set_position(book_id: int, pos: Position):
-        book = _db().get_book(book_id)
-        if not book:
-            raise HTTPException(404, "book not found")
+        book = _book_or_404(book_id)
         payload = _sentence_payload(book, pos.idx)
         _db().set_position(book_id, payload["idx"])
         return payload

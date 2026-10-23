@@ -1,4 +1,4 @@
-"""SQLite persistence: books, sentences, reading position, attempts and stats."""
+"""SQLite persistence: books, sentences, sections, reading position, attempts and stats."""
 
 from __future__ import annotations
 
@@ -25,6 +25,15 @@ CREATE TABLE IF NOT EXISTS sentences (
     text TEXT NOT NULL,
     PRIMARY KEY (book_id, idx)
 );
+CREATE TABLE IF NOT EXISTS sections (
+    book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('chapter', 'page')),
+    idx INTEGER NOT NULL,
+    title TEXT,
+    start_sentence INTEGER NOT NULL,
+    PRIMARY KEY (book_id, kind, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_sections_start ON sections(book_id, kind, start_sentence);
 CREATE TABLE IF NOT EXISTS attempts (
     id INTEGER PRIMARY KEY,
     book_id INTEGER REFERENCES books(id) ON DELETE SET NULL,
@@ -107,7 +116,9 @@ class Database:
 
     # ------------------------------------------------------------------ books
     @_locked
-    def add_book(self, title: str, filename: str, sentences: list[str]) -> int:
+    def add_book(self, title: str, filename: str, sentences: list[str],
+                 chapters: list[tuple[str, int]] = (), page_starts: list[int] | None = None) -> int:
+        """Chapters are (title, start sentence); page_starts are stored only for real (PDF) pages."""
         with self._conn:
             cur = self._conn.execute(
                 "INSERT INTO books (title, filename, created_at, sentence_count, last_opened_at)"
@@ -119,7 +130,44 @@ class Database:
                 "INSERT INTO sentences (book_id, idx, text) VALUES (?, ?, ?)",
                 [(book_id, i, s) for i, s in enumerate(sentences)],
             )
+            self._conn.executemany(
+                "INSERT INTO sections (book_id, kind, idx, title, start_sentence) VALUES (?,?,?,?,?)",
+                [(book_id, "chapter", i, t, start) for i, (t, start) in enumerate(chapters)]
+                + [(book_id, "page", i, str(i + 1), start) for i, start in enumerate(page_starts or [])],
+            )
             return book_id
+
+    @_locked
+    def sections(self, book_id: int, kind: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT idx, title, start_sentence AS start FROM sections"
+            " WHERE book_id = ? AND kind = ? ORDER BY idx", (book_id, kind),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @_locked
+    def section(self, book_id: int, kind: str, idx: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT idx, title, start_sentence AS start FROM sections"
+            " WHERE book_id = ? AND kind = ? AND idx = ?", (book_id, kind, idx),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @_locked
+    def section_at(self, book_id: int, kind: str, sentence_idx: int) -> dict | None:
+        """The last section of this kind starting at or before the sentence."""
+        row = self._conn.execute(
+            "SELECT idx, title, start_sentence AS start FROM sections"
+            " WHERE book_id = ? AND kind = ? AND start_sentence <= ?"
+            " ORDER BY start_sentence DESC, idx DESC LIMIT 1", (book_id, kind, sentence_idx),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @_locked
+    def section_count(self, book_id: int, kind: str) -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM sections WHERE book_id = ? AND kind = ?", (book_id, kind),
+        ).fetchone()[0]
 
     @_locked
     def list_books(self) -> list[dict]:

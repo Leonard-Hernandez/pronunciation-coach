@@ -6,6 +6,7 @@ const SESSION_ID = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now
 const state = {
   bookId: null,
   current: null,     // sentence payload from the API
+  toc: null,         // chapters and page starts of the open book
   result: null,      // last score result
   recordingUrl: null, // object URL of the last recording, for "You vs model"
   recorder: null,
@@ -426,6 +427,27 @@ function renderSentence() {
   $("progress").textContent = `Sentence ${s.idx + 1} of ${s.total}`;
   $("prev").disabled = s.idx <= 0;
   $("next").disabled = s.idx >= s.total - 1;
+  renderBookNav();
+}
+
+function renderBookNav() {
+  const s = state.current;
+  const select = $("chapter");
+  if (s.chapter) select.value = String(s.chapter.idx);
+  else if (select.options.length) select.selectedIndex = -1;
+  const page = $("page");
+  page.max = s.page_count;
+  if (document.activeElement !== page) page.value = s.page;
+  $("page-count").textContent = s.page_count;
+  $("prev-page").disabled = s.page <= 1;
+  $("next-page").disabled = s.page >= s.page_count;
+}
+
+function renderToc() {
+  const chapters = state.toc ? state.toc.chapters : [];
+  const select = $("chapter");
+  select.replaceChildren(...chapters.map((c) => el("option", { value: c.idx }, c.title)));
+  select.classList.toggle("hidden", !chapters.length);
 }
 
 function selectWord(index, text) {
@@ -567,23 +589,51 @@ function errorMessage(e) {
   return frag;
 }
 
-async function loadSentence(idx) {
-  if (state.bookId == null) return;
-  const q = idx == null ? "" : `?idx=${idx}`;
-  state.current = await api(`/api/books/${state.bookId}/sentence${q}`);
+function showSentence(payload) {
+  state.current = payload;
   state.result = null;
   setRecording(null);
   renderSentence();
   renderResult();
 }
 
+async function loadSentence(idx) {
+  if (state.bookId == null) return;
+  const q = idx == null ? "" : `?idx=${idx}`;
+  showSentence(await api(`/api/books/${state.bookId}/sentence${q}`));
+}
+
+async function jumpTo(target) {
+  if (state.bookId == null) return;
+  try {
+    showSentence(await api(`/api/books/${state.bookId}/jump`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(target),
+    }));
+  } catch (err) {
+    setStatus(`Error: ${err.message}`);
+    renderBookNav();
+  }
+}
+
 async function openBook(id) {
   state.bookId = id;
   $("no-book").classList.add("hidden");
   $("practice").classList.remove("hidden");
+  state.toc = await api(`/api/books/${id}/toc`);
+  renderToc();
   await loadSentence(null);
   showTab("practice");
 }
+
+$("chapter").addEventListener("change", (e) => jumpTo({ chapter: Number(e.target.value) }));
+$("page").addEventListener("change", (e) => {
+  const n = Math.round(Number(e.target.value));
+  if (!state.current || !n || n === state.current.page) return renderBookNav();
+  jumpTo({ page: Math.max(1, Math.min(n, state.current.page_count)) });
+});
+$("page").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+$("prev-page").addEventListener("click", () => state.current && jumpTo({ page: state.current.page - 1 }));
+$("next-page").addEventListener("click", () => state.current && jumpTo({ page: state.current.page + 1 }));
 
 $("prev").addEventListener("click", () => state.current && loadSentence(state.current.idx - 1));
 $("next").addEventListener("click", () => state.current && loadSentence(state.current.idx + 1));
@@ -665,7 +715,7 @@ $("record").addEventListener("click", toggleRecording);
 
 document.addEventListener("keydown", (e) => {
   const tag = (e.target.tagName || "").toLowerCase();
-  if (tag === "input" || tag === "textarea" || e.target.isContentEditable) return;
+  if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
   if (!$("tab-practice").classList.contains("active")) return;
   if (e.code === "Space") { e.preventDefault(); if (!e.repeat) toggleRecording(); }
   else if (e.key === "ArrowRight" && !state.recorder) $("next").click();
@@ -684,17 +734,20 @@ async function loadBooks() {
   if (!books.length) list.append(el("li", { class: "muted" }, "No books yet."));
   for (const b of books) {
     const progress = b.sentence_count ? (b.position + 1) / b.sentence_count : 0;
+    const where = `${b.chapter ? `Ch. ${b.chapter.idx + 1} · ${b.chapter.title} — ` : ""}p. ${b.page}/${b.page_count}`;
     list.append(el("li", {},
-      el("span", { class: "title", title: b.title }, b.title),
-      el("span", { class: "meta" }, `${b.position + 1} / ${b.sentence_count}`),
-      el("span", { class: "bar" }, Object.assign(el("span"), { style: `width:${progress * 100}%` })),
+      el("span", { class: "info" },
+        el("span", { class: "title", title: b.title }, b.title),
+        el("span", { class: "meta", title: where }, where)),
+      el("span", { class: "bar", title: `Sentence ${b.position + 1} of ${b.sentence_count}` },
+        Object.assign(el("span"), { style: `width:${progress * 100}%` })),
       el("button", { class: "primary", onclick: () => openBook(b.id) }, "Read"),
       el("button", {
         class: "ghost", title: "Delete book",
         onclick: async () => {
           if (!confirm(`Delete "${b.title}"? Attempt history is kept.`)) return;
           await api(`/api/books/${b.id}`, { method: "DELETE" });
-          if (state.bookId === b.id) { state.bookId = null; state.current = null; init(); }
+          if (state.bookId === b.id) { state.bookId = null; state.current = null; state.toc = null; init(); }
           loadBooks();
         },
       }, "Delete"),

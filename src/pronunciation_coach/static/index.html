@@ -30,6 +30,14 @@
           <span id="book-title"></span>
           <span id="progress"></span>
         </div>
+        <div class="book-nav">
+          <select id="chapter" class="hidden" aria-label="Chapter"></select>
+          <div class="pager">
+            <button id="prev-page" class="ghost" title="Previous page" aria-label="Previous page">&lsaquo;</button>
+            <label>Page <input id="page" type="number" min="1" inputmode="numeric" aria-label="Page number"> of <span id="page-count"></span></label>
+            <button id="next-page" class="ghost" title="Next page" aria-label="Next page">&rsaquo;</button>
+          </div>
+        </div>
         <p id="sentence" class="sentence"></p>
         <div class="controls">
           <button id="prev" class="ghost" title="Previous sentence (←)">&larr; Prev</button>
